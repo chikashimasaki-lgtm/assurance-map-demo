@@ -1,0 +1,1022 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>アシュアランス・マップ デモ</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          tred: '#C8102E',
+          ink: '#1F1F1F',
+          card: '#F4F4F4',
+          tint: '#FBEAEC',
+          line: '#D9D9D9',
+        },
+      },
+    },
+  };
+</script>
+<style>
+  html { -webkit-text-size-adjust: 100%; }
+  body { color: #1F1F1F; }
+  .slide-in { animation: slideIn .22s ease-out; }
+  @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+  .fade-in { animation: fadeIn .18s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  /* tooltip */
+  .cellwrap { position: relative; }
+  .cellwrap .callout {
+    visibility: hidden; opacity: 0; transition: opacity .12s;
+    position: absolute; z-index: 40; bottom: 125%; left: 50%; transform: translateX(-50%);
+    background: #1F1F1F; color: #fff; padding: 8px 10px; border-radius: 6px;
+    width: 220px; font-size: 11px; line-height: 1.5; text-align: left; pointer-events: none;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  }
+  .cellwrap:hover .callout { visibility: visible; opacity: 1; }
+  .cellwrap .callout::after {
+    content: ''; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+    border: 5px solid transparent; border-top-color: #1F1F1F;
+  }
+  ::-webkit-scrollbar { height: 10px; width: 10px; }
+  ::-webkit-scrollbar-thumb { background: #D9D9D9; border-radius: 5px; }
+  @media print {
+    body * { visibility: hidden; }
+    #print-area, #print-area * { visibility: visible; }
+    #print-area { position: absolute; left: 0; top: 0; width: 100%; }
+    .no-print { display: none !important; }
+  }
+</style>
+
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect, useRef } = React;
+
+/* ============================================================
+   定数・カラーマップ
+   ============================================================ */
+const SYM_VALUE = { '◎': 3, '○': 2, '△': 1, '−': 0 };
+const SYM_LABEL = { '◎': '高', '○': '中', '△': '低', '−': '無' };
+const SYM_STYLE = {
+  '◎': { bg: '#2E7D32', fg: '#ffffff' },
+  '○': { bg: '#66BB6A', fg: '#ffffff' },
+  '△': { bg: '#FDD835', fg: '#1F1F1F' },
+  '−': { bg: '#BDBDBD', fg: '#ffffff' },
+};
+const INHERENT_STYLE = {
+  '高': { bg: '#EF5350', fg: '#ffffff' },
+  '中': { bg: '#FFA726', fg: '#1F1F1F' },
+  '低': { bg: '#66BB6A', fg: '#ffffff' },
+};
+const ASSESS_STYLE = {
+  '要強化': { bg: '#C8102E', fg: '#ffffff', dot: '#C8102E' },
+  '重複疑い': { bg: '#FDD835', fg: '#1F1F1F', dot: '#FDD835' },
+  '適正': { bg: '#2E7D32', fg: '#ffffff', dot: '#2E7D32' },
+};
+
+// アシュアランス列の定義（横軸）
+const ACOLS = [
+  { key: 'l1', label: '1線', full: '第1ライン（事業部門）' },
+  { key: 'l2_rm', label: '2線①', full: '第2ライン① リスク管理部門' },
+  { key: 'l2_compliance', label: '2線②', full: '第2ライン② コンプライアンス部門' },
+  { key: 'l2_security', label: '2線③', full: '第2ライン③ 情報セキュリティ部門' },
+  { key: 'l2_finance', label: '2線④', full: '第2ライン④ 経理・財務部門' },
+  { key: 'l3', label: '3線', full: '第3ライン（内部監査部門）' },
+  { key: 'external', label: '外部', full: '外部（会計監査人・認証審査機関）' },
+];
+
+/* ============================================================
+   デモデータ（12リスク項目）
+   score / assessment は下部で自動算出
+   ============================================================ */
+const RAW_RISKS = [
+  {
+    no: 1, category: 'コンプライアンス', risk: '個人情報の漏えい・目的外利用', owner: '各事業部門',
+    impact: 3, likelihood: 2, inherent_risk: '高',
+    l1: '◎', l2_rm: '○', l2_compliance: '△', l2_security: '◎', l2_finance: '−', l3: '○', external: '○',
+    residual_risk: '中',
+    activities: {
+      l1: '年1回の自己点検（チェックリスト形式）、取扱台帳の更新',
+      l2_rm: 'リスクアセスメントで個人情報リスクを評価、対策の進捗モニタリング',
+      l2_compliance: '規程整備・研修は実施するが個別案件の点検は限定的',
+      l2_security: 'アクセスログ監視・技術的安全管理措置の設計と運用監視',
+      l2_finance: '関与なし',
+      l3: '2年周期の個人情報保護監査（前回FY2024）',
+      external: 'PMS（プライバシーマーク）認証審査機関による年次審査',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2024監査：軽微な指摘2件（是正済）', l3Plan: 'FY2026データ全量チェックへ重点シフト',
+    externalContent: 'PMS更新審査（2年ごと）、次回FY2026',
+    comment: '個人情報保護監査は認証審査・2線と重複気味。依拠評価のうえ3線はデータ全量チェックへ重点シフト。',
+    residualReason: '技術・認証・監査で多層的にカバーされ、固有リスク高に対し残余は中に低減。',
+    policy: '会計監査人ではなくPMS審査・2線に依拠し、3線はデータ全量チェックへ重点化。',
+    reliance: 'PMS認証審査機関（依拠可）・情報セキュリティ部門（依拠可）に限定的に依拠。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 2, category: 'コンプライアンス', risk: '下請法・優越的地位の濫用', owner: '調達部',
+    impact: 3, likelihood: 2, inherent_risk: '高',
+    l1: '○', l2_rm: '−', l2_compliance: '◎', l2_security: '−', l2_finance: '−', l3: '△', external: '○',
+    residual_risk: '高',
+    activities: {
+      l1: '発注書面の交付ルール運用、支払サイト管理（自己管理のみ）',
+      l2_rm: '関与なし',
+      l2_compliance: '下請法研修・契約書レビュー・相談窓口を運用',
+      l2_security: '関与なし',
+      l2_finance: '関与なし',
+      l3: '過去に断片的な確認のみ、体系的監査は未実施',
+      external: '会計監査人が取引の実在性を一部確認',
+    },
+    l1Year: 'FY2025', l3Past: '直近3年テーマ監査実績なし', l3Plan: 'FY2026 下請法テーマ監査を新規計上',
+    externalContent: '会計監査人による取引テスト（限定的）',
+    comment: '固有リスク「高」に対しスコアが不足。3線のカバレッジが薄く、次年度テーマ監査の最優先候補。',
+    residualReason: '2線の統制は整備されるが3線検証が弱く、運用実効性の検証が不足。残余リスク高。',
+    policy: 'FY2026監査計画に下請法テーマ監査を新規組込み。調達プロセスの往査を実施。',
+    reliance: 'コンプライアンス部門は限定的依拠。3線独自検証を強化。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 3, category: '情報セキュリティ', risk: 'サイバー攻撃・情報システム停止', owner: '情報システム部',
+    impact: 3, likelihood: 3, inherent_risk: '高',
+    l1: '◎', l2_rm: '○', l2_compliance: '−', l2_security: '◎', l2_finance: '−', l3: '○', external: '◎',
+    residual_risk: '中',
+    activities: {
+      l1: '運用部門による日次監視・パッチ適用・インシデント一次対応',
+      l2_rm: 'BCP連携でシステム停止リスクを評価、対応計画をモニタリング',
+      l2_compliance: '関与なし',
+      l2_security: 'SOC運用・脆弱性診断・多層防御の設計と有効性検証',
+      l2_finance: '関与なし',
+      l3: '年次のIT全般統制監査、標的型攻撃訓練の評価',
+      external: 'ISMS認証審査機関による年次審査',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2025 ITGC監査：改善提案3件', l3Plan: 'FY2026 クラウド構成のセキュリティ監査',
+    externalContent: 'ISMS（ISO27001）維持審査、次回FY2026',
+    comment: '固有リスク高だが2線・外部・3線がバランス良くカバー。適正水準を維持。',
+    residualReason: '多層防御と外部審査で残余は中に低減。ただし脅威高度化により継続監視が必要。',
+    policy: 'ISMS審査に依拠しつつ、3線はクラウド構成の設計妥当性を重点確認。',
+    reliance: '情報セキュリティ部門（依拠可）・ISMS審査機関（依拠可）に依拠。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 4, category: '財務報告', risk: '財務報告の重要な虚偽表示', owner: '経理・財務部',
+    impact: 3, likelihood: 2, inherent_risk: '高',
+    l1: '◎', l2_rm: '−', l2_compliance: '−', l2_security: '−', l2_finance: '◎', l3: '○', external: '◎',
+    residual_risk: '低',
+    activities: {
+      l1: '各部門での決算関連統制の自己点検、証憑管理',
+      l2_rm: '関与なし',
+      l2_compliance: '関与なし',
+      l2_security: '関与なし',
+      l2_finance: '決算・開示プロセスの整備運用、J-SOX統制文書の維持',
+      l3: 'J-SOX評価（内部統制報告制度）の独立評価',
+      external: '会計監査人による財務諸表監査・内部統制監査',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2025 J-SOX評価：重要な不備なし', l3Plan: 'FY2026 J-SOX評価継続',
+    externalContent: '会計監査人による年度監査（無限定適正意見）',
+    comment: '会計監査人・J-SOXで強固にカバー。適正。会計監査人への依拠でスコープ最適化。',
+    residualReason: '外部監査と内部統制評価により残余リスク低。',
+    policy: '会計監査人に依拠し、3線はJ-SOX評価の効率化を図る。',
+    reliance: '会計監査人（依拠可）・経理財務部門（限定的依拠）に依拠。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 5, category: 'コンプライアンス', risk: '贈収賄・腐敗行為（海外拠点含む）', owner: '法務部',
+    impact: 3, likelihood: 2, inherent_risk: '高',
+    l1: '○', l2_rm: '−', l2_compliance: '○', l2_security: '−', l2_finance: '−', l3: '△', external: '−',
+    residual_risk: '高',
+    activities: {
+      l1: '贈答・接待の事前申請運用（拠点により運用差あり）',
+      l2_rm: '関与なし',
+      l2_compliance: '腐敗防止規程の整備・研修、第三者デューデリの一部運用',
+      l2_security: '関与なし',
+      l2_finance: '関与なし',
+      l3: '国内本社中心の確認に留まり、海外拠点の往査は限定的',
+      external: '対応なし',
+    },
+    l1Year: 'FY2024', l3Past: '海外拠点の腐敗防止監査は未実施', l3Plan: 'FY2026 海外拠点腐敗防止監査を新規計上',
+    externalContent: '外部アシュアランスなし',
+    comment: '固有リスク「高」に対しスコアが著しく不足。特に海外拠点のカバレッジが空白。最優先の要強化。',
+    residualReason: '海外拠点の統制運用が未検証で、残余リスク高。',
+    policy: 'FY2026海外拠点腐敗防止監査を新規組込み。第三者デューデリ運用を3線が検証。',
+    reliance: '依拠可能な外部・2線アシュアランスが乏しく、3線独自監査が必須。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 6, category: '情報セキュリティ', risk: '内部不正によるデータ持ち出し', owner: '情報システム部',
+    impact: 2, likelihood: 2, inherent_risk: '中',
+    l1: '◎', l2_rm: '◎', l2_compliance: '○', l2_security: '◎', l2_finance: '−', l3: '◎', external: '○',
+    residual_risk: '低',
+    activities: {
+      l1: 'DLP運用・持ち出し申請フローの運用',
+      l2_rm: '内部不正リスクを重点リスクとして評価・モニタリング',
+      l2_compliance: '内部通報制度の運用、行動規範研修',
+      l2_security: 'ログ監視・特権ID管理・USB制御の設計と検証',
+      l2_finance: '関与なし',
+      l3: '毎年の情報持ち出し監査、ログ分析',
+      external: 'ISMS審査で技術的統制を確認',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2025 内部不正監査：指摘なし', l3Plan: 'FY2026 監査頻度の見直しを検討',
+    externalContent: 'ISMS審査（情報管理領域）',
+    comment: '固有リスク「中」に対し1線・2線・3線・外部が重厚に重複。過剰アシュアランスの疑い。2線と3線の活動統廃合を検討中。',
+    residualReason: '多層統制で残余リスク低だが、コスト対効果の観点で重複の整理余地あり。',
+    policy: '3線の監査頻度を隔年に見直し、2線モニタリングへ依拠する統廃合を検討。',
+    reliance: '情報セキュリティ部門（依拠可）・リスク管理部門（依拠可）に依拠し3線負荷を軽減。',
+    audit_plan: 'FY2027',
+  },
+  {
+    no: 7, category: '事業継続', risk: '自然災害・パンデミックによる事業中断', owner: '総務部',
+    impact: 3, likelihood: 2, inherent_risk: '中',
+    l1: '◎', l2_rm: '◎', l2_compliance: '−', l2_security: '○', l2_finance: '−', l3: '○', external: '−',
+    residual_risk: '中',
+    activities: {
+      l1: '拠点別の初動対応・安否確認訓練の実施',
+      l2_rm: 'BCP統括・全社訓練の企画運営・見直しモニタリング',
+      l2_compliance: '関与なし',
+      l2_security: 'IT-BCP（システム冗長化・復旧手順）の整備運用',
+      l2_finance: '関与なし',
+      l3: 'BCP有効性の評価監査（訓練結果のレビュー）',
+      external: '対応なし',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2024 BCP監査：改善提案2件', l3Plan: 'FY2026 サプライチェーンBCPを追加検証',
+    externalContent: '外部アシュアランスなし',
+    comment: '1線・2線・3線でバランス良くカバー。適正。サプライチェーン領域の深掘り余地あり。',
+    residualReason: '訓練と評価で一定の実効性を確保。残余リスク中。',
+    policy: '現行体制を維持。FY2026はサプライチェーンBCPを監査スコープに追加。',
+    reliance: 'リスク管理部門（依拠可）のBCPモニタリングに依拠。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 8, category: '財務報告', risk: '資金管理・不正送金', owner: '財務部',
+    impact: 3, likelihood: 1, inherent_risk: '中',
+    l1: '◎', l2_rm: '○', l2_compliance: '−', l2_security: '○', l2_finance: '◎', l3: '◎', external: '◎',
+    residual_risk: '低',
+    activities: {
+      l1: '振込の職務分掌・ダブルチェック・承認権限運用',
+      l2_rm: '資金リスク・不正リスクの評価とモニタリング',
+      l2_compliance: '関与なし',
+      l2_security: 'バンキングシステムのアクセス統制・多要素認証',
+      l2_finance: '資金繰り管理・銀行残高照合・支払統制の設計運用',
+      l3: '毎年の資金管理監査・送金統制テスト',
+      external: '会計監査人による資金・預金の実証手続',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2025 資金管理監査：指摘なし', l3Plan: 'FY2026 監査範囲の効率化を検討',
+    externalContent: '会計監査人による預金確認・実証手続',
+    comment: '固有リスク「中」に対し1線・2線・3線・外部すべてが強くカバー。重複疑い。会計監査人・J-SOXと3線監査の役割整理が必要。',
+    residualReason: '重層的統制で残余リスク低。効率化の観点で3線範囲の縮小余地あり。',
+    policy: '会計監査人・J-SOX統制に依拠し、3線監査は隔年・リスクベースへ縮小を検討。',
+    reliance: '会計監査人（依拠可）・経理財務部門（限定的依拠）に依拠。',
+    audit_plan: 'FY2027',
+  },
+  {
+    no: 9, category: '人事・労務', risk: 'ハラスメント・労務コンプライアンス', owner: '人事部',
+    impact: 2, likelihood: 2, inherent_risk: '中',
+    l1: '○', l2_rm: '−', l2_compliance: '◎', l2_security: '−', l2_finance: '−', l3: '○', external: '−',
+    residual_risk: '中',
+    activities: {
+      l1: '各職場の労働時間管理・1on1面談の運用',
+      l2_rm: '関与なし',
+      l2_compliance: 'ハラスメント相談窓口・研修・調査対応の統括',
+      l2_security: '関与なし',
+      l2_finance: '関与なし',
+      l3: '労務コンプライアンス監査（相談対応プロセスの検証）',
+      external: '対応なし',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2024 労務監査：改善提案1件', l3Plan: 'FY2026 相談対応の適時性を重点確認',
+    externalContent: '外部アシュアランスなし',
+    comment: 'コンプライアンス部門と3線でカバー。適正。相談件数増加に伴い運用実効性の継続確認が必要。',
+    residualReason: '相談・研修体制は整備。運用の適時性に留意し残余リスク中。',
+    policy: '現行体制を維持。相談対応の適時性・秘匿性を3線が定期検証。',
+    reliance: 'コンプライアンス部門（限定的依拠）に依拠し3線が補完。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 10, category: 'コンプライアンス', risk: '独占禁止法・カルテル', owner: '法務部',
+    impact: 3, likelihood: 1, inherent_risk: '中',
+    l1: '△', l2_rm: '−', l2_compliance: '○', l2_security: '−', l2_finance: '−', l3: '−', external: '−',
+    residual_risk: '高',
+    activities: {
+      l1: '競合接触時の記録ルール（運用は部門任せで形骸化気味）',
+      l2_rm: '関与なし',
+      l2_compliance: '独禁法研修・同業他社会合の事前届出制度を運用',
+      l2_security: '関与なし',
+      l2_finance: '関与なし',
+      l3: '独禁法領域の監査実績なし',
+      external: '対応なし',
+    },
+    l1Year: 'FY2024', l3Past: 'テーマ監査実績なし', l3Plan: 'FY2026 独禁法コンプライアンス監査を新規計上',
+    externalContent: '外部アシュアランスなし',
+    comment: '1線運用が形骸化し3線・外部のカバーも空白。カルテルは制裁が甚大なため要強化。',
+    residualReason: '運用の実効性が検証されておらず、残余リスク高。',
+    policy: 'FY2026独禁法監査を新規組込み。事前届出制度の運用状況を3線が検証。',
+    reliance: 'コンプライアンス部門は限定的依拠。3線独自検証を要する。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 11, category: '情報セキュリティ', risk: 'クラウドサービス・委託先管理', owner: '情報システム部',
+    impact: 2, likelihood: 3, inherent_risk: '中',
+    l1: '○', l2_rm: '○', l2_compliance: '△', l2_security: '◎', l2_finance: '−', l3: '○', external: '○',
+    residual_risk: '中',
+    activities: {
+      l1: 'クラウド利用申請・委託先の一次審査運用',
+      l2_rm: '委託先リスクの評価・重要委託先のモニタリング',
+      l2_compliance: '委託契約の秘密保持条項レビュー（限定的）',
+      l2_security: '委託先セキュリティ基準の策定・SOC2報告書の評価',
+      l2_finance: '関与なし',
+      l3: '委託先管理プロセスの監査',
+      external: '委託先のSOC2 Type2報告書（外部監査人作成）',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2025 委託先管理監査：改善提案2件', l3Plan: 'FY2026 重要委託先の現地確認を検討',
+    externalContent: '委託先SOC2報告書の入手・評価',
+    comment: '2線・3線・外部（SOC2）でカバー。適正。委託先増加に伴い評価の網羅性維持が課題。',
+    residualReason: 'SOC2報告書と2線評価で一定の保証。網羅性維持に留意し残余リスク中。',
+    policy: '委託先SOC2報告書に依拠しつつ、重要委託先は3線が現地確認を検討。',
+    reliance: '情報セキュリティ部門（依拠可）・委託先SOC2（外部監査人、依拠可）に依拠。',
+    audit_plan: 'FY2026',
+  },
+  {
+    no: 12, category: '財務報告', risk: '固定資産・棚卸資産の評価', owner: '経理部',
+    impact: 2, likelihood: 1, inherent_risk: '低',
+    l1: '○', l2_rm: '−', l2_compliance: '−', l2_security: '−', l2_finance: '○', l3: '○', external: '◎',
+    residual_risk: '低',
+    activities: {
+      l1: '実地棚卸の実施・資産管理台帳の更新',
+      l2_rm: '関与なし',
+      l2_compliance: '関与なし',
+      l2_security: '関与なし',
+      l2_finance: '減損・評価損の会計処理レビュー、見積の妥当性検討',
+      l3: '棚卸立会・資産実在性の監査',
+      external: '会計監査人による評価・実在性の実証手続',
+    },
+    l1Year: 'FY2025', l3Past: 'FY2025 棚卸監査：指摘なし', l3Plan: 'FY2026 リスクベースで隔年化を検討',
+    externalContent: '会計監査人による棚卸立会・評価テスト',
+    comment: '固有リスク低に対し会計監査人・2線・3線でカバー。適正。効率化余地あり。',
+    residualReason: '外部監査と内部統制で残余リスク低。',
+    policy: '会計監査人に依拠し、3線監査はリスクベースで隔年化を検討。',
+    reliance: '会計監査人（依拠可）に依拠。',
+    audit_plan: 'FY2027',
+  },
+];
+
+/* ============================================================
+   スコア算出・判定ロジック（自動算出）
+   ============================================================ */
+function computeScore(r) {
+  return ACOLS.reduce((sum, c) => sum + (SYM_VALUE[r[c.key]] || 0), 0);
+}
+function strongCount(r) {
+  return ACOLS.reduce((n, c) => n + (r[c.key] === '◎' || r[c.key] === '○' ? 1 : 0), 0);
+}
+function judge(r) {
+  const score = computeScore(r);
+  const strong = strongCount(r);
+  const inh = r.inherent_risk;
+  // ギャップ判定（固有リスクに対しカバレッジ不足）
+  if (inh === '高' && score < 11) return '要強化';
+  if (inh === '中' && score < 7) return '要強化';
+  if (inh === '低' && score < 4) return '要強化';
+  // 重複疑い（固有リスクに比して過剰なアシュアランス）
+  if ((inh === '中' || inh === '低') && strong >= 5 && score >= 14) return '重複疑い';
+  if (inh === '高' && strong >= 6 && score >= 17) return '重複疑い';
+  return '適正';
+}
+const RISKS = RAW_RISKS.map((r) => ({ ...r, score: computeScore(r), assessment: judge(r) }));
+
+const CATEGORIES = [...new Set(RISKS.map((r) => r.category))];
+
+/* ============================================================
+   依拠評価データ（GIAS 9.5）
+   ============================================================ */
+const LEVEL_PT = { '高': 2, '中': 1, '低': 0 };
+function relianceJudge(p) {
+  const pts = LEVEL_PT[p.objectivity] + LEVEL_PT[p.competency] + LEVEL_PT[p.process];
+  if (LEVEL_PT[p.objectivity] === 0) return pts >= 3 ? '限定的依拠' : '依拠不可';
+  if (pts >= 5) return '依拠可';
+  if (pts >= 3) return '限定的依拠';
+  return '依拠不可';
+}
+const RAW_PROVIDERS = [
+  { name: 'リスク管理部門', line: '2線', objectivity: '中', competency: '高', process: '高',
+    policy: '全社リスク評価・モニタリング結果に依拠。3線は評価前提の妥当性を確認。' },
+  { name: 'コンプライアンス部門', line: '2線', objectivity: '中', competency: '高', process: '中',
+    policy: '研修・相談窓口の運用実績に限定的に依拠。個別案件は3線が検証。' },
+  { name: '情報セキュリティ部門', line: '2線', objectivity: '中', competency: '高', process: '高',
+    policy: 'SOC運用・脆弱性診断の結果に依拠。技術統制の再テストは省略。' },
+  { name: '経理・財務部門', line: '2線', objectivity: '低', competency: '高', process: '中',
+    policy: '自己評価の性質上、客観性に留意。J-SOX統制の再評価は3線が実施。' },
+  { name: '監査役', line: '3線', objectivity: '高', competency: '中', process: '中',
+    policy: '往査・重要会議出席の結果を共有。相互補完的に情報連携。' },
+  { name: '会計監査人', line: '外部', objectivity: '高', competency: '高', process: '高',
+    policy: '財務諸表監査・内部統制監査の結果に全面的に依拠。重複手続を回避。' },
+  { name: 'ISMS/PMS認証審査機関', line: '外部', objectivity: '高', competency: '高', process: '高',
+    policy: '年次審査結果に依拠し、情報セキュリティ領域の3線監査を最適化。' },
+];
+const PROVIDERS = RAW_PROVIDERS.map((p) => ({ ...p, overall: relianceJudge(p) }));
+const RELIANCE_STYLE = {
+  '依拠可': { bg: '#2E7D32', fg: '#fff' },
+  '限定的依拠': { bg: '#FDD835', fg: '#1F1F1F' },
+  '依拠不可': { bg: '#EF5350', fg: '#fff' },
+};
+
+/* ============================================================
+   小物コンポーネント
+   ============================================================ */
+function Pill({ text, style }) {
+  return (
+    <span className="inline-flex items-center justify-center rounded px-2 py-0.5 text-xs font-bold"
+      style={{ background: style.bg, color: style.fg }}>{text}</span>
+  );
+}
+
+function SymCell({ sym, activity, onClick, highlight }) {
+  const st = SYM_STYLE[sym];
+  return (
+    <td className="p-1 text-center">
+      <div className="cellwrap inline-block">
+        <button
+          onClick={onClick}
+          className="w-8 h-8 rounded flex items-center justify-center text-sm font-bold mx-auto transition-transform hover:scale-110"
+          style={{ background: st.bg, color: st.fg, outline: highlight ? '3px solid #C8102E' : 'none' }}
+          aria-label={`${SYM_LABEL[sym]}`}
+        >{sym}</button>
+        {activity && <span className="callout">{activity}</span>}
+      </div>
+    </td>
+  );
+}
+
+/* ----- ドーナツチャート（自前SVG） ----- */
+function Donut({ data, onSegClick, active }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const R = 70, r = 44, cx = 90, cy = 90;
+  let acc = 0;
+  const segs = data.map((d) => {
+    const start = acc / total, end = (acc + d.value) / total;
+    acc += d.value;
+    const a0 = start * 2 * Math.PI - Math.PI / 2;
+    const a1 = end * 2 * Math.PI - Math.PI / 2;
+    const large = end - start > 0.5 ? 1 : 0;
+    const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0);
+    const x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
+    const xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
+    const xi1 = cx + r * Math.cos(a1), yi1 = cy + r * Math.sin(a1);
+    const path = `M ${x0} ${y0} A ${R} ${R} 0 ${large} 1 ${x1} ${y1} L ${xi1} ${yi1} A ${r} ${r} 0 ${large} 0 ${xi0} ${yi0} Z`;
+    return { ...d, path };
+  });
+  const [hover, setHover] = useState(null);
+  return (
+    <div className="flex items-center gap-4">
+      <svg width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="ステータス別リスク分布">
+        {segs.map((s) => (
+          <path key={s.label} d={s.path} fill={s.color}
+            opacity={active && active !== s.label ? 0.3 : (hover && hover !== s.label ? 0.6 : 1)}
+            stroke="#fff" strokeWidth="2" style={{ cursor: 'pointer', transition: 'opacity .15s' }}
+            onClick={() => onSegClick(s.label)}
+            onMouseEnter={() => setHover(s.label)} onMouseLeave={() => setHover(null)} />
+        ))}
+        <text x="90" y="84" textAnchor="middle" className="fill-ink" fontSize="26" fontWeight="700">{total}</text>
+        <text x="90" y="104" textAnchor="middle" fill="#888" fontSize="11">リスク総数</text>
+      </svg>
+      <div className="space-y-1.5 text-sm">
+        {segs.map((s) => (
+          <button key={s.label} onClick={() => onSegClick(s.label)}
+            className="flex items-center gap-2 w-full text-left hover:opacity-70">
+            <span className="w-3 h-3 rounded-sm" style={{ background: s.color }}></span>
+            <span className="flex-1">{s.label}</span>
+            <span className="font-bold tabular-nums">{s.value}</span>
+          </button>
+        ))}
+        {active && (
+          <button onClick={() => onSegClick(null)} className="text-xs text-tred underline mt-1">フィルタ解除</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ----- ヒストグラム（自前SVG） ----- */
+function Histogram({ bins }) {
+  const max = Math.max(...bins.map((b) => b.count), 1);
+  const W = 340, H = 180, pad = 30, bw = (W - pad * 2) / bins.length;
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="カバレッジスコア分布">
+      {[0, 0.5, 1].map((t) => (
+        <line key={t} x1={pad} x2={W - pad} y1={pad + (H - pad * 2) * (1 - t)} y2={pad + (H - pad * 2) * (1 - t)}
+          stroke="#eee" />
+      ))}
+      {bins.map((b, i) => {
+        const h = (b.count / max) * (H - pad * 2);
+        const x = pad + i * bw + 6;
+        return (
+          <g key={b.label}>
+            <rect x={x} y={H - pad - h} width={bw - 12} height={h} rx="3" fill="#C8102E" opacity="0.85" />
+            {b.count > 0 && <text x={x + (bw - 12) / 2} y={H - pad - h - 5} textAnchor="middle" fontSize="11" fontWeight="700" fill="#1F1F1F">{b.count}</text>}
+            <text x={x + (bw - 12) / 2} y={H - pad + 14} textAnchor="middle" fontSize="10" fill="#666">{b.label}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ----- サマリーカード ----- */
+function SummaryCard({ label, value, style, onClick, active }) {
+  return (
+    <button onClick={onClick}
+      className="flex-1 min-w-[120px] rounded-lg border p-3 text-left transition hover:shadow-md"
+      style={{ borderColor: active ? (style ? style.dot : '#C8102E') : '#D9D9D9', background: active ? '#FBEAEC' : '#fff', borderWidth: active ? 2 : 1 }}>
+      <div className="flex items-center gap-2">
+        {style && <span className="w-2.5 h-2.5 rounded-full" style={{ background: style.dot }}></span>}
+        <span className="text-xs text-gray-600">{label}</span>
+      </div>
+      <div className="text-2xl font-bold mt-1" style={{ color: style ? style.dot : '#1F1F1F' }}>{value}<span className="text-sm font-normal text-gray-500 ml-1">件</span></div>
+    </button>
+  );
+}
+
+/* ============================================================
+   詳細パネル
+   ============================================================ */
+function DetailPanel({ risk, onClose, highlightCol }) {
+  if (!risk) return null;
+  const l2cols = [
+    { key: 'l2_rm', label: '2線① リスク管理部門' },
+    { key: 'l2_compliance', label: '2線② コンプライアンス部門' },
+    { key: 'l2_security', label: '2線③ 情報セキュリティ部門' },
+    { key: 'l2_finance', label: '2線④ 経理・財務部門' },
+  ];
+  const Section = ({ title, children }) => (
+    <div className="mb-4">
+      <h4 className="text-tred font-bold text-sm border-b-2 border-tint pb-1 mb-2">{title}</h4>
+      {children}
+    </div>
+  );
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/30 z-40 fade-in" onClick={onClose}></div>
+      <aside className="fixed top-0 right-0 h-full w-full sm:w-[440px] bg-white z-50 shadow-2xl slide-in overflow-y-auto">
+        <div className="sticky top-0 bg-tred text-white px-4 py-3 flex items-start justify-between z-10">
+          <div>
+            <div className="text-xs opacity-80">No.{risk.no} ・ {risk.category}</div>
+            <h3 className="font-bold text-base leading-tight mt-0.5">{risk.risk}</h3>
+          </div>
+          <button onClick={onClose} className="text-white/90 hover:text-white text-2xl leading-none ml-2" aria-label="閉じる">×</button>
+        </div>
+        <div className="p-4">
+          <Section title="基本情報">
+            <dl className="grid grid-cols-2 gap-y-2 text-sm">
+              <dt className="text-gray-500">オーナー部門</dt><dd className="font-medium">{risk.owner}</dd>
+              <dt className="text-gray-500">影響度</dt><dd>{risk.impact} / 3</dd>
+              <dt className="text-gray-500">発生可能性</dt><dd>{risk.likelihood} / 3</dd>
+              <dt className="text-gray-500">固有リスク</dt><dd><Pill text={risk.inherent_risk} style={INHERENT_STYLE[risk.inherent_risk]} /></dd>
+              <dt className="text-gray-500">カバレッジスコア</dt><dd className="font-bold">{risk.score} / 21</dd>
+              <dt className="text-gray-500">判定</dt><dd><Pill text={risk.assessment} style={ASSESS_STYLE[risk.assessment]} /></dd>
+            </dl>
+          </Section>
+
+          <Section title="アシュアランス活動の詳細">
+            <div className="space-y-2 text-sm">
+              <ActRow label="第1ライン（事業部門）" sym={risk.l1} text={risk.activities.l1} meta={`最終実施：${risk.l1Year}`} hl={highlightCol === 'l1'} />
+              {l2cols.map((c) => (
+                <ActRow key={c.key} label={c.label} sym={risk[c.key]} text={risk.activities[c.key]} hl={highlightCol === c.key} />
+              ))}
+              <ActRow label="第3ライン（内部監査）" sym={risk.l3} text={risk.activities.l3}
+                meta={`過年度：${risk.l3Past}／当年度予定：${risk.l3Plan}`} hl={highlightCol === 'l3'} />
+              <ActRow label="外部（会計監査人・審査機関）" sym={risk.external} text={risk.activities.external}
+                meta={risk.externalContent} hl={highlightCol === 'external'} />
+            </div>
+          </Section>
+
+          <Section title="ギャップ・重複の分析コメント">
+            <p className="text-sm bg-card rounded p-2.5 leading-relaxed">{risk.comment}</p>
+          </Section>
+
+          <Section title="残余リスク評価">
+            <div className="flex items-center gap-2 text-sm">
+              <Pill text={risk.residual_risk} style={INHERENT_STYLE[risk.residual_risk]} />
+              <span className="text-gray-700">{risk.residualReason}</span>
+            </div>
+          </Section>
+
+          <Section title="対応方針">
+            <p className="text-sm font-bold text-tred leading-relaxed">{risk.policy}</p>
+            <p className="text-xs text-gray-600 mt-2"><span className="font-bold">依拠方針：</span>{risk.reliance}</p>
+            <p className="text-xs text-gray-500 mt-1">監査計画：{risk.audit_plan}</p>
+          </Section>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function ActRow({ label, sym, text, meta, hl }) {
+  const st = SYM_STYLE[sym];
+  return (
+    <div className="flex gap-2.5 rounded p-2" style={{ background: hl ? '#FBEAEC' : 'transparent', outline: hl ? '1px solid #C8102E' : 'none' }}>
+      <span className="w-7 h-7 shrink-0 rounded flex items-center justify-center text-sm font-bold"
+        style={{ background: st.bg, color: st.fg }}>{sym}</span>
+      <div className="min-w-0">
+        <div className="font-medium text-[13px]">{label}</div>
+        <div className="text-gray-600 text-[12px] leading-snug">{text}</div>
+        {meta && <div className="text-gray-400 text-[11px] mt-0.5">{meta}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   メインテーブル
+   ============================================================ */
+function RiskTable({ rows, onRowClick, onCellClick }) {
+  if (rows.length === 0) {
+    return <div className="p-10 text-center text-gray-400">該当するリスクがありません。フィルタ条件を変更してください。</div>;
+  }
+  return (
+    <div className="overflow-x-auto border border-line rounded-lg">
+      <table className="min-w-[1000px] w-full text-sm border-collapse" aria-label="リスク一覧表">
+        <thead>
+          <tr className="bg-ink text-white text-xs">
+            <th className="p-2 sticky left-0 bg-ink z-10">No</th>
+            <th className="p-2 text-left">カテゴリ</th>
+            <th className="p-2 text-left min-w-[180px]">リスク項目</th>
+            <th className="p-2">固有<br/>リスク</th>
+            {ACOLS.map((c) => <th key={c.key} className="p-2" title={c.full}>{c.label}</th>)}
+            <th className="p-2">スコア</th>
+            <th className="p-2">判定</th>
+            <th className="p-2 text-left min-w-[140px]">対応方針</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.no} className="border-b border-line hover:bg-tint cursor-pointer" onClick={() => onRowClick(r)}>
+              <td className="p-2 text-center font-bold sticky left-0 bg-white z-10">{r.no}</td>
+              <td className="p-2 text-gray-700 whitespace-nowrap">{r.category}</td>
+              <td className="p-2 font-medium">{r.risk}<div className="text-[11px] text-gray-400">{r.owner}</div></td>
+              <td className="p-2 text-center"><Pill text={r.inherent_risk} style={INHERENT_STYLE[r.inherent_risk]} /></td>
+              {ACOLS.map((c) => (
+                <SymCell key={c.key} sym={r[c.key]} activity={r.activities[c.key]}
+                  onClick={(e) => { e.stopPropagation(); onCellClick(r, c.key); }} />
+              ))}
+              <td className="p-2 text-center font-bold tabular-nums">{r.score}</td>
+              <td className="p-2 text-center"><Pill text={r.assessment} style={ASSESS_STYLE[r.assessment]} /></td>
+              <td className="p-2 text-[12px] text-tred font-semibold leading-snug">{r.policy}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ============================================================
+   タブ：ダッシュボード
+   ============================================================ */
+function Dashboard({ onRowClick, onCellClick }) {
+  const [statusFilter, setStatusFilter] = useState(null); // null | 要強化 | 重複疑い | 適正
+  const [cats, setCats] = useState(new Set());
+
+  const counts = useMemo(() => {
+    const c = { 要強化: 0, 重複疑い: 0, 適正: 0 };
+    RISKS.forEach((r) => c[r.assessment]++);
+    return c;
+  }, []);
+
+  const filtered = useMemo(() => {
+    return RISKS.filter((r) => {
+      if (statusFilter && r.assessment !== statusFilter) return false;
+      if (cats.size > 0 && !cats.has(r.category)) return false;
+      return true;
+    });
+  }, [statusFilter, cats]);
+
+  const donutData = [
+    { label: '要強化', value: counts['要強化'], color: ASSESS_STYLE['要強化'].dot },
+    { label: '重複疑い', value: counts['重複疑い'], color: ASSESS_STYLE['重複疑い'].dot },
+    { label: '適正', value: counts['適正'], color: ASSESS_STYLE['適正'].dot },
+  ];
+
+  const toggleCat = (c) => {
+    const n = new Set(cats);
+    n.has(c) ? n.delete(c) : n.add(c);
+    setCats(n);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* サマリー + チャート */}
+      <div className="grid lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white rounded-lg border border-line p-4">
+          <h3 className="text-sm font-bold text-gray-500 mb-3">サマリー</h3>
+          <div className="flex flex-wrap gap-3">
+            <SummaryCard label="対象リスク総数" value={RISKS.length} onClick={() => { setStatusFilter(null); setCats(new Set()); }} active={!statusFilter && cats.size === 0} />
+            <SummaryCard label="ギャップ（要強化）" value={counts['要強化']} style={ASSESS_STYLE['要強化']} onClick={() => setStatusFilter(statusFilter === '要強化' ? null : '要強化')} active={statusFilter === '要強化'} />
+            <SummaryCard label="重複疑い" value={counts['重複疑い']} style={ASSESS_STYLE['重複疑い']} onClick={() => setStatusFilter(statusFilter === '重複疑い' ? null : '重複疑い')} active={statusFilter === '重複疑い'} />
+            <SummaryCard label="適正" value={counts['適正']} style={ASSESS_STYLE['適正']} onClick={() => setStatusFilter(statusFilter === '適正' ? null : '適正')} active={statusFilter === '適正'} />
+          </div>
+        </div>
+        <div className="bg-white rounded-lg border border-line p-4">
+          <h3 className="text-sm font-bold text-gray-500 mb-2">ステータス別分布</h3>
+          <Donut data={donutData} active={statusFilter} onSegClick={(l) => setStatusFilter(statusFilter === l ? null : l)} />
+        </div>
+      </div>
+
+      {/* フィルタ */}
+      <div className="bg-white rounded-lg border border-line p-3 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 font-bold">判定：</span>
+          {[['すべて', null], ['ギャップのみ', '要強化'], ['重複のみ', '重複疑い'], ['適正のみ', '適正']].map(([lbl, val]) => (
+            <button key={lbl} onClick={() => setStatusFilter(val)}
+              className="px-3 py-1 rounded-full text-xs font-semibold border transition"
+              style={{ background: statusFilter === val ? '#C8102E' : '#fff', color: statusFilter === val ? '#fff' : '#1F1F1F', borderColor: '#D9D9D9' }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+        <div className="h-5 w-px bg-line hidden sm:block"></div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-gray-500 font-bold">カテゴリ：</span>
+          {CATEGORIES.map((c) => (
+            <label key={c} className="flex items-center gap-1 text-xs cursor-pointer select-none">
+              <input type="checkbox" checked={cats.has(c)} onChange={() => toggleCat(c)} className="accent-tred" />
+              {c}
+            </label>
+          ))}
+        </div>
+        <div className="ml-auto flex gap-2">
+          <button onClick={() => exportCSV(filtered)} className="px-3 py-1.5 rounded bg-ink text-white text-xs font-semibold hover:opacity-90">CSV出力</button>
+          <button onClick={() => exportPDF(RISKS.filter((r) => r.assessment === '要強化'))} className="px-3 py-1.5 rounded border border-tred text-tred text-xs font-semibold hover:bg-tint">ギャップ一覧PDF</button>
+        </div>
+      </div>
+
+      <div className="text-xs text-gray-500">{filtered.length} 件表示中（全 {RISKS.length} 件）</div>
+
+      <RiskTable rows={filtered} onRowClick={onRowClick} onCellClick={onCellClick} />
+
+      <details className="bg-card rounded-lg p-3 text-xs text-gray-600">
+        <summary className="cursor-pointer font-bold">凡例・スコア算出ルール</summary>
+        <div className="mt-2 space-y-1">
+          <p>アシュアランス水準：<span className="font-bold">◎</span> 高(3点) ／ <span className="font-bold">○</span> 中(2点) ／ <span className="font-bold">△</span> 低(1点) ／ <span className="font-bold">−</span> 無(0点)</p>
+          <p>カバレッジスコア ＝ 7列（1線・2線①〜④・3線・外部）の合計（最大21点）</p>
+          <p>判定：固有リスクに対しスコア不足＝<span className="text-tred font-bold">要強化</span> ／ 過剰カバー＝<span className="font-bold" style={{color:'#B59B00'}}>重複疑い</span> ／ 均衡＝<span className="font-bold" style={{color:'#2E7D32'}}>適正</span>（自動算出）</p>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/* ============================================================
+   タブ：依拠評価（GIAS 9.5）
+   ============================================================ */
+function RelianceTab() {
+  return (
+    <div className="bg-white rounded-lg border border-line p-4">
+      <h3 className="font-bold text-tred mb-1">依拠評価（GIAS 基準9.5）</h3>
+      <p className="text-xs text-gray-500 mb-4">各アシュアランス提供者の「客観性・専門的能力・体系的プロセス」を評価し、総合判定（依拠可否）を自動算出します。</p>
+      <div className="overflow-x-auto">
+        <table className="min-w-[760px] w-full text-sm border-collapse">
+          <thead>
+            <tr className="bg-ink text-white text-xs">
+              <th className="p-2 text-left">アシュアランス提供者</th>
+              <th className="p-2">ライン</th>
+              <th className="p-2">客観性</th>
+              <th className="p-2">専門的能力</th>
+              <th className="p-2">体系的プロセス</th>
+              <th className="p-2">総合判定</th>
+              <th className="p-2 text-left min-w-[240px]">依拠方針</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PROVIDERS.map((p) => (
+              <tr key={p.name} className="border-b border-line hover:bg-tint">
+                <td className="p-2 font-medium">{p.name}</td>
+                <td className="p-2 text-center text-gray-600">{p.line}</td>
+                <td className="p-2 text-center"><Pill text={p.objectivity} style={INHERENT_STYLE[p.objectivity]} /></td>
+                <td className="p-2 text-center"><Pill text={p.competency} style={INHERENT_STYLE[p.competency]} /></td>
+                <td className="p-2 text-center"><Pill text={p.process} style={INHERENT_STYLE[p.process]} /></td>
+                <td className="p-2 text-center"><Pill text={p.overall} style={RELIANCE_STYLE[p.overall]} /></td>
+                <td className="p-2 text-[12px] text-gray-700 leading-snug">{p.policy}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] text-gray-400 mt-3">総合判定ロジック：高=2 / 中=1 / 低=0 点。合計5点以上＝依拠可、3〜4点＝限定的依拠、2点以下＝依拠不可。客観性「低」の場合は上限を限定的依拠とする。</p>
+    </div>
+  );
+}
+
+/* ============================================================
+   タブ：統計・分析
+   ============================================================ */
+function StatsTab() {
+  const inherent = useMemo(() => {
+    const c = { 高: 0, 中: 0, 低: 0 };
+    RISKS.forEach((r) => c[r.inherent_risk]++);
+    return c;
+  }, []);
+  const bins = useMemo(() => {
+    const defs = [[0, 3], [4, 6], [7, 9], [10, 12], [13, 21]];
+    return defs.map(([lo, hi]) => ({
+      label: hi === 21 ? `${lo}+` : `${lo}-${hi}`,
+      count: RISKS.filter((r) => r.score >= lo && r.score <= hi).length,
+    }));
+  }, []);
+  const cross = useMemo(() => {
+    const map = {};
+    CATEGORIES.forEach((cat) => {
+      map[cat] = { 要強化: 0, 重複疑い: 0, 適正: 0, total: 0 };
+    });
+    RISKS.forEach((r) => { map[r.category][r.assessment]++; map[r.category].total++; });
+    return map;
+  }, []);
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-4">
+      <div className="bg-white rounded-lg border border-line p-4">
+        <h3 className="font-bold text-gray-600 text-sm mb-3">固有リスク分布</h3>
+        <div className="flex gap-3">
+          {['高', '中', '低'].map((lvl) => (
+            <div key={lvl} className="flex-1 rounded-lg p-3 text-center" style={{ background: INHERENT_STYLE[lvl].bg + '22' }}>
+              <div className="text-3xl font-bold" style={{ color: INHERENT_STYLE[lvl].bg }}>{inherent[lvl]}</div>
+              <div className="text-xs text-gray-600 mt-1">固有リスク {lvl}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg border border-line p-4">
+        <h3 className="font-bold text-gray-600 text-sm mb-3">カバレッジスコア分布</h3>
+        <Histogram bins={bins} />
+      </div>
+
+      <div className="bg-white rounded-lg border border-line p-4 lg:col-span-2">
+        <h3 className="font-bold text-gray-600 text-sm mb-3">カテゴリ別 × 判定 クロス集計</h3>
+        <div className="overflow-x-auto">
+          <table className="min-w-[520px] w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-500 border-b border-line">
+                <th className="p-2 text-left">カテゴリ</th>
+                <th className="p-2 text-center">要強化</th>
+                <th className="p-2 text-center">重複疑い</th>
+                <th className="p-2 text-center">適正</th>
+                <th className="p-2 text-center">計</th>
+              </tr>
+            </thead>
+            <tbody>
+              {CATEGORIES.map((cat) => (
+                <tr key={cat} className="border-b border-line">
+                  <td className="p-2 font-medium">{cat}</td>
+                  <td className="p-2 text-center" style={{ color: cross[cat]['要強化'] ? '#C8102E' : '#ccc', fontWeight: cross[cat]['要強化'] ? 700 : 400 }}>{cross[cat]['要強化']}</td>
+                  <td className="p-2 text-center" style={{ color: cross[cat]['重複疑い'] ? '#B59B00' : '#ccc', fontWeight: cross[cat]['重複疑い'] ? 700 : 400 }}>{cross[cat]['重複疑い']}</td>
+                  <td className="p-2 text-center" style={{ color: cross[cat]['適正'] ? '#2E7D32' : '#ccc', fontWeight: cross[cat]['適正'] ? 700 : 400 }}>{cross[cat]['適正']}</td>
+                  <td className="p-2 text-center font-bold">{cross[cat].total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   タブ：Help
+   ============================================================ */
+function HelpTab() {
+  const items = [
+    ['ダッシュボード', 'サマリーカード／ドーナツチャートのクリックで判定フィルタ、カテゴリチェックで絞込み。行クリックで詳細パネル、水準セル（◎○△−）ホバーで活動内容ツールチップ、セルクリックで詳細内の該当ラインを強調。'],
+    ['依拠評価(GIAS 9.5)', '7つのアシュアランス提供者の客観性・専門的能力・体系的プロセスから総合判定（依拠可／限定的依拠／依拠不可）を自動算出。'],
+    ['統計', '固有リスク分布・カバレッジスコアのヒストグラム・カテゴリ別クロス集計を表示。'],
+    ['エクスポート', 'CSV：表示中（フィルタ後）のデータをExcel対応で出力。ギャップ一覧PDF：要強化リスクを印刷レイアウトで出力（ブラウザの印刷ダイアログからPDF保存）。'],
+  ];
+  return (
+    <div className="bg-white rounded-lg border border-line p-5 max-w-3xl">
+      <h3 className="font-bold text-tred mb-3">操作ガイド</h3>
+      <div className="space-y-3">
+        {items.map(([t, d]) => (
+          <div key={t}>
+            <div className="font-bold text-sm">{t}</div>
+            <p className="text-sm text-gray-600 leading-relaxed">{d}</p>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 pt-4 border-t border-line text-xs text-gray-500 leading-relaxed">
+        <p className="font-bold mb-1">本デモについて</p>
+        <p>3ラインモデルに基づくアシュアランス・マップのデモ。12件のリスク項目・7提供者の依拠評価を内蔵。数値・判定はすべてサンプルです。想定用途：監査委員会報告、FY2027監査計画策定、2線部門との協議、グループ会社展開。</p>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   エクスポート機能
+   ============================================================ */
+function exportCSV(rows) {
+  const header = ['No', 'カテゴリ', 'リスク項目', 'オーナー', '固有リスク', ...ACOLS.map((c) => c.label), 'スコア', '判定', '残余リスク', '対応方針'];
+  const lines = rows.map((r) => [
+    r.no, r.category, r.risk, r.owner, r.inherent_risk,
+    ...ACOLS.map((c) => r[c.key]), r.score, r.assessment, r.residual_risk, r.policy,
+  ]);
+  const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const csv = '﻿' + [header, ...lines].map((row) => row.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `assurance_map_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function exportPDF(gaps) {
+  const area = document.getElementById('print-area');
+  area.innerHTML = `
+    <div style="font-family: sans-serif; padding: 24px; color:#1F1F1F;">
+      <h1 style="color:#C8102E; font-size:20px; border-bottom:3px solid #C8102E; padding-bottom:6px;">アシュアランス・マップ ギャップ（要強化）一覧</h1>
+      <p style="font-size:12px; color:#666;">出力日：${new Date().toLocaleDateString('ja-JP')} ／ 対象：${gaps.length}件</p>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:12px;">
+        <thead><tr style="background:#1F1F1F; color:#fff;">
+          <th style="padding:6px; border:1px solid #ccc;">No</th>
+          <th style="padding:6px; border:1px solid #ccc;">カテゴリ</th>
+          <th style="padding:6px; border:1px solid #ccc; text-align:left;">リスク項目</th>
+          <th style="padding:6px; border:1px solid #ccc;">固有</th>
+          <th style="padding:6px; border:1px solid #ccc;">スコア</th>
+          <th style="padding:6px; border:1px solid #ccc;">監査計画</th>
+        </tr></thead>
+        <tbody>
+          ${gaps.map((r) => `<tr>
+            <td style="padding:6px; border:1px solid #ccc; text-align:center;">${r.no}</td>
+            <td style="padding:6px; border:1px solid #ccc;">${r.category}</td>
+            <td style="padding:6px; border:1px solid #ccc;">${r.risk}<br><span style="color:#888;">${r.owner}</span></td>
+            <td style="padding:6px; border:1px solid #ccc; text-align:center;">${r.inherent_risk}</td>
+            <td style="padding:6px; border:1px solid #ccc; text-align:center;">${r.score}/21</td>
+            <td style="padding:6px; border:1px solid #ccc; text-align:center;">${r.audit_plan}</td>
+          </tr>
+          <tr><td colspan="6" style="padding:6px 6px 12px; border:1px solid #ccc; color:#C8102E; font-weight:bold; font-size:11px;">対応方針：${r.policy}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  window.print();
+  setTimeout(() => { area.innerHTML = ''; }, 500);
+}
+
+/* ============================================================
+   アプリ本体
+   ============================================================ */
+const TABS = ['ダッシュボード', '依拠評価(GIAS 9.5)', '統計', 'Help'];
+
+function App() {
+  const [tab, setTab] = useState('ダッシュボード');
+  const [selected, setSelected] = useState(null);
+  const [highlightCol, setHighlightCol] = useState(null);
+
+  const openRow = (r) => { setSelected(r); setHighlightCol(null); };
+  const openCell = (r, col) => { setSelected(r); setHighlightCol(col); };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') setSelected(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-card">
+      <header className="bg-white border-b-2 border-tred sticky top-0 z-30 no-print">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex items-center gap-3 py-3">
+            <div className="w-8 h-8 rounded bg-tred text-white flex items-center justify-center font-bold text-lg">A</div>
+            <h1 className="font-bold text-lg text-ink">アシュアランス・マップ</h1>
+            <span className="text-xs text-gray-400 hidden sm:inline">3ラインモデル可視化デモ</span>
+          </div>
+          <nav className="flex gap-1 overflow-x-auto">
+            {TABS.map((t) => (
+              <button key={t} onClick={() => setTab(t)}
+                className="px-4 py-2 text-sm font-semibold whitespace-nowrap border-b-2 transition"
+                style={{ borderColor: tab === t ? '#C8102E' : 'transparent', color: tab === t ? '#C8102E' : '#666' }}>
+                {t}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-5 no-print">
+        {tab === 'ダッシュボード' && <Dashboard onRowClick={openRow} onCellClick={openCell} />}
+        {tab === '依拠評価(GIAS 9.5)' && <RelianceTab />}
+        {tab === '統計' && <StatsTab />}
+        {tab === 'Help' && <HelpTab />}
+      </main>
+
+      <footer className="max-w-7xl mx-auto px-4 py-6 text-center text-xs text-gray-400 no-print">
+        内部監査部門 ／ アシュアランス・マップ デモ ／ 数値・判定はサンプルです
+      </footer>
+
+      {selected && <DetailPanel risk={selected} highlightCol={highlightCol} onClose={() => setSelected(null)} />}
+      <div id="print-area"></div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
